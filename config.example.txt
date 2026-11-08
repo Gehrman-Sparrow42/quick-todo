@@ -1,0 +1,2 @@
+# Copy this file to config.txt beside quick-todo.exe and set your own path.
+target=C:\path\to\your\vault\Todo.md

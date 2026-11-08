@@ -1,0 +1,7 @@
+/.toolchain/
+/target/
+/artifacts/
+/quick-todo.exe
+/config.txt
+/.impeccable/
+/.worktrees/
