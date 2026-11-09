@@ -7,6 +7,7 @@ Quick Todo uses standard Windows utility controls. This is a task surface: openi
 - Quiet light surface (#f5f7f6), dark ink (#323629), muted helper text (#5b6053) and a deep teal primary action (#155f55).
 - Twenty-eight-pixel content inset; a label directly above the native multiline edit control, with ten-pixel horizontal text margins.
 - One idea per line; Save and Hide are visible beside the editor.
+- The editor label row shows Paste image and its Ctrl+V shortcut. An attached screenshot changes the label to Screenshot attached and offers Remove image.
 - Editor receives focus on opening, activation and the global shortcut. Tab reaches the native buttons.
 - The close button and Escape hide the window without losing the in-memory draft.
 - Save failures use the native error dialog and leave the draft in place.

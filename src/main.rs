@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 mod append;
+mod clipboard;
 mod ui;
 
 use std::{
@@ -24,6 +25,7 @@ const QUIT_MSG: u32 = WM_APP + 3;
 const EDIT: i32 = 100;
 const SAVE: i32 = 101;
 const HIDE: i32 = 102;
+const ATTACH: i32 = 105;
 const OPEN: usize = 103;
 const EXIT: usize = 104;
 const WINDOW_WIDTH: i32 = 620;
@@ -31,6 +33,7 @@ const WINDOW_HEIGHT: i32 = 360;
 struct State {
     edit: HWND,
     target: PathBuf,
+    screenshot: Option<Vec<u8>>,
     icon: NOTIFYICONDATAW,
     taskbar: u32,
     ui: Option<ui::Ui>,
@@ -56,12 +59,52 @@ unsafe fn show(hwnd: HWND) {
     SetForegroundWindow(hwnd);
     SetFocus((*state(hwnd)).edit);
 }
+unsafe fn set_screenshot(hwnd: HWND, image: Option<Vec<u8>>) {
+    let ptr = state(hwnd);
+    if ptr.is_null() {
+        return;
+    }
+    let attached = image.is_some();
+    (*ptr).screenshot = image;
+    if let Some(ui) = &(*ptr).ui {
+        ui.show_attachment(attached);
+    }
+}
+unsafe fn paste_image(hwnd: HWND, prefer_text: bool) -> bool {
+    match clipboard::read_image(hwnd, prefer_text) {
+        Ok(Some(image)) => {
+            set_screenshot(hwnd, Some(image));
+            true
+        }
+        Ok(None) if prefer_text => false,
+        Ok(None) => {
+            message(
+                hwnd,
+                "No image to paste",
+                "Copy an image or take a screenshot with Win+Shift+S, then paste it here.",
+                MB_OK | MB_ICONINFORMATION,
+            );
+            true
+        }
+        Err(error) => {
+            message(
+                hwnd,
+                "Could not paste image",
+                &error.to_string(),
+                MB_OK | MB_ICONERROR,
+            );
+            true
+        }
+    }
+}
 unsafe fn save(hwnd: HWND) {
     // Copy handles and owned data before calls that can reenter the window procedure.
     let edit = (*state(hwnd)).edit;
     let target = (*state(hwnd)).target.clone();
-    match append::append_tasks(&target, &draft(edit)) {
+    let text = draft(edit);
+    match append::append_tasks(&target, &text, (*state(hwnd)).screenshot.as_deref()) {
         Ok(true) => {
+            set_screenshot(hwnd, None);
             SetWindowTextW(edit, wide("").as_ptr());
             ShowWindow(hwnd, SW_HIDE);
         }
@@ -81,7 +124,7 @@ unsafe fn save(hwnd: HWND) {
     }
 }
 unsafe fn quit(hwnd: HWND) {
-    if !draft((*state(hwnd)).edit).trim().is_empty()
+    if ((*state(hwnd)).screenshot.is_some() || !draft((*state(hwnd)).edit).trim().is_empty())
         && message(
             hwnd,
             "Unsaved draft",
@@ -138,6 +181,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_COMMAND => {
             match (wp & 0xffff) as i32 {
                 SAVE => save(hwnd),
+                ATTACH => {
+                    if (*ptr).screenshot.is_some() {
+                        set_screenshot(hwnd, None);
+                    } else {
+                        paste_image(hwnd, false);
+                    }
+                    let current = state(hwnd);
+                    if !current.is_null() {
+                        SetFocus((*current).edit);
+                    }
+                }
                 HIDE => {
                     ShowWindow(hwnd, SW_HIDE);
                 }
@@ -305,6 +359,7 @@ unsafe fn run() -> Result<(), String> {
     let s = Box::new(State {
         edit: null_mut(),
         target,
+        screenshot: None,
         icon: zeroed(),
         taskbar: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
         ui: None,
@@ -355,6 +410,14 @@ unsafe fn run() -> Result<(), String> {
     let mut msg: MSG = zeroed();
     while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
         if msg.message == WM_KEYDOWN {
+            if msg.hwnd == (*state(hwnd)).edit
+                && msg.wParam as u32 == VK_V as u32
+                && GetKeyState(VK_CONTROL as i32) < 0
+                && GetKeyState(VK_MENU as i32) >= 0
+                && paste_image(hwnd, true)
+            {
+                continue;
+            }
             if msg.wParam as u32 == VK_ESCAPE as u32 {
                 ShowWindow(hwnd, SW_HIDE);
                 continue;

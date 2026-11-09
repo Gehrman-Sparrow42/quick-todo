@@ -25,6 +25,7 @@ The user confirmed automatic startup at Windows sign-in. Ctrl+Alt+T is the offer
 ## Capabilities and Constraints
 
 - Append Markdown tasks without rewriting existing notes.
+- Paste a Windows screenshot into the draft and save it as an image under its task.
 - Use a compact native editor with a visible save action and keyboard access.
 - Preserve unsaved text when hiding the window; retain it and show an error on a failed save.
 - Keep all data local. No application runtime network access is needed.

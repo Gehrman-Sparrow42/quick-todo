@@ -15,6 +15,7 @@ The compact native window uses a quiet light background, readable Segoe UI text,
 | Action | Control |
 | --- | --- |
 | Open the capture window | Ctrl+Alt+T, tray icon, or launch the executable |
+| Attach a copied screenshot | Ctrl+V or Paste image |
 | Save every nonempty line as a task | Ctrl+Enter or Save |
 | Start another idea on a new line | Enter |
 | Hide and keep the current draft | Escape, Hide, or the window close button |
@@ -36,6 +37,12 @@ appends:
 ```
 
 Existing notes are preserved byte for byte, including their UTF-8 BOM and LF or CRLF line endings. Input bullets (`- `, `* `, and `- [ ] `) are normalized so they are not duplicated. Empty input does nothing. Drafts remain in memory while the application runs; quitting prompts before discarding a draft.
+
+### Capture a screenshot
+
+Take a snip with **Win+Shift+S**, open Quick Todo with **Ctrl+Alt+T**, and paste with **Ctrl+V**. The editor shows **Screenshot attached**. Add a description and save with **Ctrl+Enter**. Use **Remove image** to clear the attachment, or paste another image to replace it. A copied text selection still pastes as text.
+
+Each draft holds one screenshot. Saving writes a PNG into `quick-todo-attachments` beside the configured Markdown file and embeds it below the first task. An image without a description saves as a task named `Screenshot`. Quick Todo accepts PNG and Windows clipboard bitmaps up to 40 million pixels, with a 32 MiB limit on the saved PNG.
 
 ## Configure and install
 
@@ -70,7 +77,7 @@ Only one instance runs per Windows session. A second launch activates the first 
 
 ## Build and verify
 
-Source: [native window and shortcuts](src/main.rs), [native controls and styling](src/ui.rs), [file appending and tests](src/append.rs), [Windows resource build](build.rs).
+Source: [native window and shortcuts](src/main.rs), [native controls and styling](src/ui.rs), [Windows clipboard images](src/clipboard.rs), [task and attachment storage](src/append.rs), [Windows resource build](build.rs).
 
 The note/checkmark icon is embedded in the executable for the taskbar, window and tray. Its [vector artwork](resources/quick-todo.svg) and [Windows icon](resources/quick-todo.ico) are included. To regenerate the icon and PNG preview using Windows' built-in drawing library:
 
@@ -91,16 +98,18 @@ rustup component add rustfmt clippy
 ```
 
 ```powershell
-.\build.ps1            # Format check, Clippy, six behavioral tests, release build, deploy
+.\build.ps1            # Format check, Clippy, tests, release build, deploy
 .\build.ps1 -CheckOnly # Same checks and build; leave the installed executable alone
 ```
 
 Quit Quick Todo before deploying a rebuilt executable. The build script refuses to replace an executable that is currently running.
 
-The tests cover existing content preservation, newline styles, UTF-8 BOM, Turkish characters, bullet normalization, blank input, empty files, missing targets, invalid encodings and file sharing conflicts. They use temporary files inside `target/test-files`, never the configured notes file.
+The tests cover existing content preservation, newline styles, UTF-8 BOM, Turkish characters, bullet normalization, blank input, empty files, missing targets, invalid encodings, file sharing conflicts, screenshot placement and Windows bitmap encoding. They use temporary files inside `target/test-files`, never the configured notes file.
 
 ## Saving and failure behavior
 
 During a save, Quick Todo opens the existing target with other writers and renames excluded, validates its encoding, appends tasks and flushes the write. If a write or flush fails, it attempts to truncate only the newly appended bytes back to the original length. Errors preserve the editor draft. If rollback also fails, the message explicitly asks you to inspect the file before retrying.
+
+For a draft with an image, Quick Todo writes and flushes the PNG before appending its link. If a failed note append is rolled back, the app removes the new PNG. When rollback fails, the app keeps the PNG available for any link already written.
 
 The file lock protects the short append operation. A separate editor can still later overwrite the file using an older unsaved copy; reload external changes before saving such a copy. Drafts are not persisted across process termination or Windows sign-out.

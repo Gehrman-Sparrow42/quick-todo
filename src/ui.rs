@@ -1,4 +1,4 @@
-use crate::{wide, EDIT, HIDE, SAVE};
+use crate::{wide, ATTACH, EDIT, HIDE, SAVE};
 use std::{
     mem::{size_of, zeroed},
     ptr::null,
@@ -6,7 +6,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::LibraryLoader::GetModuleHandleW,
+    System::{LibraryLoader::GetModuleHandleW, SystemServices::SS_RIGHT},
     UI::{Controls::*, WindowsAndMessaging::*},
 };
 
@@ -23,6 +23,8 @@ const TEAL: u32 = 0x00555f15;
 
 pub struct Ui {
     pub edit: HWND,
+    attachment_status: HWND,
+    attachment_button: HWND,
     font: HFONT,
     heading: HFONT,
     background: HBRUSH,
@@ -109,7 +111,7 @@ impl Ui {
             0,
             28,
             62,
-            400,
+            180,
             24,
             0,
             font,
@@ -154,6 +156,21 @@ impl Ui {
         } else {
             BS_OWNERDRAW as u32
         };
+        let attachment_status = child(
+            hwnd, "STATIC", "Ctrl+V", SS_RIGHT, 218, 62, 196, 24, 0, font,
+        );
+        let attachment_button = child(
+            hwnd,
+            "BUTTON",
+            "Paste image",
+            WS_TABSTOP | button_style,
+            426,
+            55,
+            150,
+            30,
+            ATTACH,
+            font,
+        );
         child(
             hwnd,
             "BUTTON",
@@ -180,11 +197,23 @@ impl Ui {
         );
         Self {
             edit,
+            attachment_status,
+            attachment_button,
             font,
             heading,
             background,
             high_contrast,
         }
+    }
+    pub unsafe fn show_attachment(&self, attached: bool) {
+        let (status, action) = if attached {
+            ("Screenshot attached", "Remove image")
+        } else {
+            ("Ctrl+V", "Paste image")
+        };
+        SetWindowTextW(self.attachment_status, wide(status).as_ptr());
+        SetWindowTextW(self.attachment_button, wide(action).as_ptr());
+        InvalidateRect(self.attachment_button, null(), 0);
     }
     pub unsafe fn background(&self, dc: HDC, label: HWND) -> LRESULT {
         if self.high_contrast {
@@ -224,11 +253,12 @@ impl Ui {
         SetTextColor(item.hDC, if primary { 0x00ffffff } else { INK });
         let old = SelectObject(item.hDC, self.font as _);
         let mut rect = item.rcItem;
-        let text = wide(if primary { "Save" } else { "Hide" });
+        let mut text = [0; 32];
+        let length = GetWindowTextW(item.hwndItem, text.as_mut_ptr(), text.len() as i32);
         DrawTextW(
             item.hDC,
             text.as_ptr(),
-            -1,
+            length,
             &mut rect,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
         );
