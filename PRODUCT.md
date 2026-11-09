@@ -29,4 +29,4 @@ The user confirmed automatic startup at Windows sign-in. Ctrl+Alt+T is the offer
 - Use a compact native editor with a visible save action and keyboard access.
 - Preserve unsaved text when hiding the window; retain it and show an error on a failed save.
 - Keep all data local. No application runtime network access is needed.
-- Use standard Windows utility conventions. Keep visual refinement modest: clear typography and spacing, a restrained Save accent and a recognizable app icon. Preserve the small runtime and event-driven idle behavior.
+- Use standard Windows utility conventions with a dark capture window, clear typography, a restrained Save accent and a recognizable app icon. Preserve the small runtime and event-driven idle behavior.

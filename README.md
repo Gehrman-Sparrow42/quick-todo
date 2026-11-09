@@ -8,7 +8,7 @@ Press **Ctrl+Alt+T**, type one idea per line, then press **Ctrl+Enter**. Quick T
 
 ![Quick Todo capture window](docs/preview.png)
 
-The compact native window uses a quiet light background, readable Segoe UI text, a teal Save button and visible keyboard hints. The icon is embedded in the executable; the visual styling adds no runtime dependencies or timers.
+The compact native window uses a dark background, readable Segoe UI text, a teal Save button and visible keyboard hints. Windows supplies the title bar and native editor controls, including the high-contrast presentation.
 
 ## Daily use
 

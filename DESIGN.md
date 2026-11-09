@@ -4,7 +4,8 @@ Quick Todo uses standard Windows utility controls. This is a task surface: openi
 
 - Fixed 620 × 360 logical window, with Windows display scaling applied by the operating system.
 - Segoe UI at 16 logical pixels, with a 24-pixel semibold heading.
-- Quiet light surface (#f5f7f6), dark ink (#323629), muted helper text (#5b6053) and a deep teal primary action (#155f55).
+- Dark surface (#181c20), slightly lighter editor (#20262b), light ink (#e7edf0), muted helper text (#abb7be) and a deep teal primary action (#17695c).
+- The native Windows title bar uses matching colors where DWM supports custom caption colors.
 - Twenty-eight-pixel content inset; a label directly above the native multiline edit control, with ten-pixel horizontal text margins.
 - One idea per line; Save and Hide are visible beside the editor.
 - The editor label row shows Paste image and its Ctrl+V shortcut. An attached screenshot changes the label to Screenshot attached and offers Remove image.

@@ -174,6 +174,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             .ui
             .as_ref()
             .map_or(0, |ui| ui.background(wp as HDC, lp as HWND)),
+        WM_CTLCOLOREDIT => (*ptr)
+            .ui
+            .as_ref()
+            .map_or(0, |ui| ui.editor_background(wp as HDC)),
         WM_DRAWITEM => (*ptr)
             .ui
             .as_ref()

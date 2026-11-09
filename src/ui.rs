@@ -5,7 +5,13 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Graphics::Gdi::*,
+    Graphics::{
+        Dwm::{
+            DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+        },
+        Gdi::*,
+    },
     System::{LibraryLoader::GetModuleHandleW, SystemServices::SS_RIGHT},
     UI::{Controls::*, WindowsAndMessaging::*},
 };
@@ -16,10 +22,19 @@ struct HighContrast {
     flags: u32,
     scheme: *mut u16,
 }
-const BG: u32 = 0x00f6f7f5;
-const INK: u32 = 0x00293632;
-const MUTED: u32 = 0x0053605b;
-const TEAL: u32 = 0x00555f15;
+const fn rgb(red: u8, green: u8, blue: u8) -> u32 {
+    red as u32 | (green as u32) << 8 | (blue as u32) << 16
+}
+
+const BG: u32 = rgb(24, 28, 32);
+const EDITOR_BG: u32 = rgb(32, 38, 43);
+const INK: u32 = rgb(231, 237, 240);
+const MUTED: u32 = rgb(171, 183, 190);
+const TEAL: u32 = rgb(23, 105, 92);
+const TEAL_PRESSED: u32 = rgb(17, 79, 69);
+const BUTTON_BG: u32 = rgb(38, 46, 52);
+const BUTTON_PRESSED: u32 = rgb(49, 59, 66);
+const BUTTON_BORDER: u32 = rgb(83, 97, 106);
 
 pub struct Ui {
     pub edit: HWND,
@@ -28,6 +43,7 @@ pub struct Ui {
     font: HFONT,
     heading: HFONT,
     background: HBRUSH,
+    editor_background: HBRUSH,
     high_contrast: bool,
 }
 unsafe fn make_font(height: i32, weight: i32) -> HFONT {
@@ -47,6 +63,22 @@ unsafe fn make_font(height: i32, weight: i32) -> HFONT {
         DEFAULT_PITCH as u32,
         wide("Segoe UI").as_ptr(),
     )
+}
+
+unsafe fn dark_caption(hwnd: HWND) {
+    // Keep the system frame on Windows versions that do not support these attributes.
+    for (attribute, value) in [
+        (DWMWA_USE_IMMERSIVE_DARK_MODE, 1),
+        (DWMWA_CAPTION_COLOR, BG),
+        (DWMWA_TEXT_COLOR, INK),
+    ] {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute as u32,
+            (&value as *const u32).cast(),
+            size_of::<u32>() as u32,
+        );
+    }
 }
 #[allow(clippy::too_many_arguments)]
 unsafe fn child(
@@ -90,6 +122,14 @@ impl Ui {
         } else {
             BG
         });
+        let editor_background = CreateSolidBrush(if high_contrast {
+            GetSysColor(COLOR_WINDOW)
+        } else {
+            EDITOR_BG
+        });
+        if !high_contrast {
+            dark_caption(hwnd);
+        }
         let font = make_font(-16, FW_NORMAL as i32);
         let heading = make_font(-24, FW_SEMIBOLD as i32);
         child(
@@ -139,6 +179,10 @@ impl Ui {
             (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
             (10 | (10 << 16)) as isize,
         );
+        if !high_contrast {
+            // Use Windows' dark scrollbar theme when the installed theme provides it.
+            SetWindowTheme(edit, wide("DarkMode_Explorer").as_ptr(), null());
+        }
         child(
             hwnd,
             "STATIC",
@@ -202,6 +246,7 @@ impl Ui {
             font,
             heading,
             background,
+            editor_background,
             high_contrast,
         }
     }
@@ -225,6 +270,16 @@ impl Ui {
         }
         self.background as LRESULT
     }
+    pub unsafe fn editor_background(&self, dc: HDC) -> LRESULT {
+        let (ink, background) = if self.high_contrast {
+            (GetSysColor(COLOR_WINDOWTEXT), GetSysColor(COLOR_WINDOW))
+        } else {
+            (INK, EDITOR_BG)
+        };
+        SetTextColor(dc, ink);
+        SetBkColor(dc, background);
+        self.editor_background as LRESULT
+    }
     pub unsafe fn erase(&self, dc: HDC, hwnd: HWND) -> LRESULT {
         let mut r: RECT = zeroed();
         GetClientRect(hwnd, &mut r);
@@ -236,21 +291,21 @@ impl Ui {
         let pressed = item.itemState & ODS_SELECTED != 0;
         let fill = if primary {
             if pressed {
-                0x00404a10
+                TEAL_PRESSED
             } else {
                 TEAL
             }
         } else if pressed {
-            0x00e3e9e5
+            BUTTON_PRESSED
         } else {
-            0x00ffffff
+            BUTTON_BG
         };
         let brush = CreateSolidBrush(fill);
-        let border = CreateSolidBrush(if primary { fill } else { 0x00c4d0c9 });
+        let border = CreateSolidBrush(if primary { fill } else { BUTTON_BORDER });
         FillRect(item.hDC, &item.rcItem, brush);
         FrameRect(item.hDC, &item.rcItem, border);
         SetBkMode(item.hDC, TRANSPARENT as i32);
-        SetTextColor(item.hDC, if primary { 0x00ffffff } else { INK });
+        SetTextColor(item.hDC, INK);
         let old = SelectObject(item.hDC, self.font as _);
         let mut rect = item.rcItem;
         let mut text = [0; 32];
@@ -275,5 +330,6 @@ impl Ui {
         DeleteObject(self.font as _);
         DeleteObject(self.heading as _);
         DeleteObject(self.background as _);
+        DeleteObject(self.editor_background as _);
     }
 }
