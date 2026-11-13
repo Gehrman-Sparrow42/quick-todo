@@ -13,8 +13,31 @@ use windows_sys::Win32::{
         Gdi::*,
     },
     System::{LibraryLoader::GetModuleHandleW, SystemServices::SS_RIGHT},
-    UI::{Controls::*, WindowsAndMessaging::*},
+    UI::{Controls::*, HiDpi::GetDpiForWindow, WindowsAndMessaging::*},
 };
+
+const BASE_DPI: u32 = 96;
+
+pub const fn scale_for_dpi(px: i32, dpi: u32) -> i32 {
+    if dpi == 0 || dpi == BASE_DPI {
+        return px;
+    }
+    let scaled = px * dpi as i32;
+    if scaled >= 0 {
+        (scaled + (BASE_DPI as i32 / 2)) / BASE_DPI as i32
+    } else {
+        (scaled - (BASE_DPI as i32 / 2)) / BASE_DPI as i32
+    }
+}
+
+pub unsafe fn window_dpi(hwnd: HWND) -> u32 {
+    let dpi = GetDpiForWindow(hwnd);
+    if dpi == 0 {
+        BASE_DPI
+    } else {
+        dpi
+    }
+}
 
 #[repr(C)]
 struct HighContrast {
@@ -36,6 +59,15 @@ const BUTTON_BG: u32 = rgb(38, 46, 52);
 const BUTTON_PRESSED: u32 = rgb(49, 59, 66);
 const BUTTON_BORDER: u32 = rgb(83, 97, 106);
 
+struct ControlSlot {
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    is_heading: bool,
+}
+
 pub struct Ui {
     pub edit: HWND,
     attachment_status: HWND,
@@ -45,6 +77,7 @@ pub struct Ui {
     background: HBRUSH,
     editor_background: HBRUSH,
     high_contrast: bool,
+    controls: [ControlSlot; 8],
 }
 unsafe fn make_font(height: i32, weight: i32) -> HFONT {
     CreateFontW(
@@ -130,29 +163,31 @@ impl Ui {
         if !high_contrast {
             dark_caption(hwnd);
         }
-        let font = make_font(-16, FW_NORMAL as i32);
-        let heading = make_font(-24, FW_SEMIBOLD as i32);
-        child(
+        let dpi = window_dpi(hwnd);
+        let font = make_font(scale_for_dpi(-16, dpi), FW_NORMAL as i32);
+        let heading = make_font(scale_for_dpi(-24, dpi), FW_SEMIBOLD as i32);
+        let s = |px: i32| scale_for_dpi(px, dpi);
+        let title_label = child(
             hwnd,
             "STATIC",
             "Quick Todo",
             0,
-            28,
-            22,
-            440,
-            34,
+            s(28),
+            s(22),
+            s(440),
+            s(34),
             200,
             heading,
         );
-        child(
+        let subtitle_label = child(
             hwnd,
             "STATIC",
             "One idea per line",
             0,
-            28,
-            62,
-            180,
-            24,
+            s(28),
+            s(62),
+            s(180),
+            s(24),
             0,
             font,
         );
@@ -166,32 +201,33 @@ impl Ui {
                 | ES_MULTILINE as u32
                 | ES_AUTOVSCROLL as u32
                 | ES_WANTRETURN as u32,
-            28,
-            92,
-            548,
-            152,
+            s(28),
+            s(92),
+            s(548),
+            s(152),
             EDIT,
             font,
         );
+        let margin = s(10) as usize;
         SendMessageW(
             edit,
             EM_SETMARGINS,
             (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
-            (10 | (10 << 16)) as isize,
+            (margin | (margin << 16)) as isize,
         );
         if !high_contrast {
             // Use Windows' dark scrollbar theme when the installed theme provides it.
             SetWindowTheme(edit, wide("DarkMode_Explorer").as_ptr(), null());
         }
-        child(
+        let hint_label = child(
             hwnd,
             "STATIC",
             "Ctrl+Enter to save  ·  Esc to hide",
             0,
-            28,
-            269,
-            270,
-            23,
+            s(28),
+            s(269),
+            s(270),
+            s(23),
             0,
             font,
         );
@@ -201,44 +237,119 @@ impl Ui {
             BS_OWNERDRAW as u32
         };
         let attachment_status = child(
-            hwnd, "STATIC", "Ctrl+V", SS_RIGHT, 218, 62, 196, 24, 0, font,
+            hwnd,
+            "STATIC",
+            "Ctrl+V",
+            SS_RIGHT,
+            s(218),
+            s(62),
+            s(196),
+            s(24),
+            0,
+            font,
         );
         let attachment_button = child(
             hwnd,
             "BUTTON",
             "Paste image",
             WS_TABSTOP | button_style,
-            426,
-            55,
-            150,
-            30,
+            s(426),
+            s(55),
+            s(150),
+            s(30),
             ATTACH,
             font,
         );
-        child(
+        let hide_button = child(
             hwnd,
             "BUTTON",
             "Hide",
             WS_TABSTOP | button_style,
-            378,
-            261,
-            78,
-            38,
+            s(378),
+            s(261),
+            s(78),
+            s(38),
             HIDE,
             font,
         );
-        child(
+        let save_button = child(
             hwnd,
             "BUTTON",
             "Save",
             WS_TABSTOP | button_style,
-            468,
-            261,
-            108,
-            38,
+            s(468),
+            s(261),
+            s(108),
+            s(38),
             SAVE,
             font,
         );
+        let controls = [
+            ControlSlot {
+                hwnd: title_label,
+                x: 28,
+                y: 22,
+                w: 440,
+                h: 34,
+                is_heading: true,
+            },
+            ControlSlot {
+                hwnd: subtitle_label,
+                x: 28,
+                y: 62,
+                w: 180,
+                h: 24,
+                is_heading: false,
+            },
+            ControlSlot {
+                hwnd: edit,
+                x: 28,
+                y: 92,
+                w: 548,
+                h: 152,
+                is_heading: false,
+            },
+            ControlSlot {
+                hwnd: hint_label,
+                x: 28,
+                y: 269,
+                w: 270,
+                h: 23,
+                is_heading: false,
+            },
+            ControlSlot {
+                hwnd: attachment_status,
+                x: 218,
+                y: 62,
+                w: 196,
+                h: 24,
+                is_heading: false,
+            },
+            ControlSlot {
+                hwnd: attachment_button,
+                x: 426,
+                y: 55,
+                w: 150,
+                h: 30,
+                is_heading: false,
+            },
+            ControlSlot {
+                hwnd: hide_button,
+                x: 378,
+                y: 261,
+                w: 78,
+                h: 38,
+                is_heading: false,
+            },
+            ControlSlot {
+                hwnd: save_button,
+                x: 468,
+                y: 261,
+                w: 108,
+                h: 38,
+                is_heading: false,
+            },
+        ];
         Self {
             edit,
             attachment_status,
@@ -248,7 +359,40 @@ impl Ui {
             background,
             editor_background,
             high_contrast,
+            controls,
         }
+    }
+    pub unsafe fn rescale(&mut self, dpi: u32) {
+        let new_font = make_font(scale_for_dpi(-16, dpi), FW_NORMAL as i32);
+        let new_heading = make_font(scale_for_dpi(-24, dpi), FW_SEMIBOLD as i32);
+        for slot in &self.controls {
+            let f = if slot.is_heading {
+                new_heading
+            } else {
+                new_font
+            };
+            SendMessageW(slot.hwnd, WM_SETFONT, f as usize, 1);
+            SetWindowPos(
+                slot.hwnd,
+                std::ptr::null_mut(),
+                scale_for_dpi(slot.x, dpi),
+                scale_for_dpi(slot.y, dpi),
+                scale_for_dpi(slot.w, dpi),
+                scale_for_dpi(slot.h, dpi),
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        let margin = scale_for_dpi(10, dpi) as usize;
+        SendMessageW(
+            self.edit,
+            EM_SETMARGINS,
+            (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+            (margin | (margin << 16)) as isize,
+        );
+        DeleteObject(self.font as _);
+        DeleteObject(self.heading as _);
+        self.font = new_font;
+        self.heading = new_heading;
     }
     pub unsafe fn show_attachment(&self, attached: bool) {
         let (status, action) = if attached {
@@ -308,7 +452,7 @@ impl Ui {
         SetTextColor(item.hDC, INK);
         let old = SelectObject(item.hDC, self.font as _);
         let mut rect = item.rcItem;
-        let mut text = [0; 32];
+        let mut text = [0; 64];
         let length = GetWindowTextW(item.hwndItem, text.as_mut_ptr(), text.len() as i32);
         DrawTextW(
             item.hDC,
@@ -331,5 +475,19 @@ impl Ui {
         DeleteObject(self.heading as _);
         DeleteObject(self.background as _);
         DeleteObject(self.editor_background as _);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_for_dpi;
+
+    #[test]
+    fn scale_for_dpi_handles_positive_negative_and_zero() {
+        assert_eq!(scale_for_dpi(620, 96), 620);
+        assert_eq!(scale_for_dpi(620, 0), 620);
+        assert_eq!(scale_for_dpi(620, 144), 930);
+        assert_eq!(scale_for_dpi(-16, 144), -24);
+        assert_eq!(scale_for_dpi(-24, 192), -48);
     }
 }

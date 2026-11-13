@@ -47,6 +47,25 @@ unsafe fn message(hwnd: HWND, title: &str, text: &str, flags: u32) -> i32 {
 unsafe fn state(hwnd: HWND) -> *mut State {
     GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State
 }
+unsafe fn take_pending_state(param: isize) -> *mut State {
+    if param == 0 {
+        return null_mut();
+    }
+    let pending = &mut *(param as *mut Option<Box<State>>);
+    pending.take().map_or(null_mut(), Box::into_raw)
+}
+unsafe fn free_window_state(hwnd: HWND) -> bool {
+    let ptr = state(hwnd);
+    if ptr.is_null() {
+        return false;
+    }
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+    drop(Box::from_raw(ptr));
+    true
+}
+fn is_image_paste_shortcut(is_edit: bool, key: u32, ctrl: i16, alt: i16, shift: i16) -> bool {
+    is_edit && key == VK_V as u32 && ctrl < 0 && alt >= 0 && shift >= 0
+}
 unsafe fn draft(hwnd: HWND) -> String {
     let n = GetWindowTextLengthW(hwnd).max(0) as usize;
     let mut buf = vec![0u16; n + 1];
@@ -57,7 +76,10 @@ unsafe fn show(hwnd: HWND) {
     ShowWindow(hwnd, SW_SHOW);
     ShowWindow(hwnd, SW_RESTORE);
     SetForegroundWindow(hwnd);
-    SetFocus((*state(hwnd)).edit);
+    let ptr = state(hwnd);
+    if !ptr.is_null() {
+        SetFocus((*ptr).edit);
+    }
 }
 unsafe fn set_screenshot(hwnd: HWND, image: Option<Vec<u8>>) {
     let ptr = state(hwnd);
@@ -99,10 +121,14 @@ unsafe fn paste_image(hwnd: HWND, prefer_text: bool) -> bool {
 }
 unsafe fn save(hwnd: HWND) {
     // Copy handles and owned data before calls that can reenter the window procedure.
-    let edit = (*state(hwnd)).edit;
-    let target = (*state(hwnd)).target.clone();
+    let ptr = state(hwnd);
+    if ptr.is_null() {
+        return;
+    }
+    let edit = (*ptr).edit;
+    let target = (*ptr).target.clone();
     let text = draft(edit);
-    match append::append_tasks(&target, &text, (*state(hwnd)).screenshot.as_deref()) {
+    match append::append_tasks(&target, &text, (*ptr).screenshot.as_deref()) {
         Ok(true) => {
             set_screenshot(hwnd, None);
             SetWindowTextW(edit, wide("").as_ptr());
@@ -124,7 +150,11 @@ unsafe fn save(hwnd: HWND) {
     }
 }
 unsafe fn quit(hwnd: HWND) {
-    if ((*state(hwnd)).screenshot.is_some() || !draft((*state(hwnd)).edit).trim().is_empty())
+    let ptr = state(hwnd);
+    if ptr.is_null() {
+        return;
+    }
+    if ((*ptr).screenshot.is_some() || !draft((*ptr).edit).trim().is_empty())
         && message(
             hwnd,
             "Unsaved draft",
@@ -134,7 +164,9 @@ unsafe fn quit(hwnd: HWND) {
     {
         return;
     }
-    DestroyWindow(hwnd);
+    if !state(hwnd).is_null() {
+        DestroyWindow(hwnd);
+    }
 }
 unsafe fn add_tray(s: &mut State) {
     Shell_NotifyIconW(NIM_ADD, &s.icon);
@@ -142,9 +174,12 @@ unsafe fn add_tray(s: &mut State) {
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let cs = &*(lp as *const CREATESTRUCTW);
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+        let raw = take_pending_state(cs.lpCreateParams as isize);
+        if !raw.is_null() {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
+        }
     }
-    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
+    let ptr = state(hwnd);
     if ptr.is_null() {
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
@@ -244,10 +279,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         null(),
                     );
                     DestroyMenu(menu);
+                    let current = state(hwnd);
+                    if current.is_null() {
+                        return 0;
+                    }
                     match cmd as usize {
                         x if x == ACTIVATE as usize => show(hwnd),
                         OPEN => {
-                            let path = wide((*state(hwnd)).target.as_os_str());
+                            let path = wide((*current).target.as_os_str());
                             if ShellExecuteW(
                                 hwnd,
                                 wide("open").as_ptr(),
@@ -274,15 +313,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             0
         }
+        WM_DPICHANGED => {
+            let new_dpi = ((wp >> 16) & 0xffff) as u32;
+            let suggested = &*(lp as *const RECT);
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                suggested.left,
+                suggested.top,
+                suggested.right - suggested.left,
+                suggested.bottom - suggested.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            let current = state(hwnd);
+            if !current.is_null() {
+                if let Some(ui) = &mut (*current).ui {
+                    ui.rescale(new_dpi);
+                }
+            }
+            0
+        }
         WM_DESTROY => {
             UnregisterHotKey(hwnd, 1);
             Shell_NotifyIconW(NIM_DELETE, &(*ptr).icon);
             if let Some(ui) = &(*ptr).ui {
                 ui.destroy();
             }
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-            drop(Box::from_raw(ptr));
+            free_window_state(hwnd);
             PostQuitMessage(0);
+            0
+        }
+        WM_NCDESTROY => {
+            free_window_state(hwnd);
             0
         }
         _ if msg == (*ptr).taskbar && msg != 0 => {
@@ -368,7 +430,7 @@ unsafe fn run() -> Result<(), String> {
         taskbar: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
         ui: None,
     });
-    let raw = Box::into_raw(s);
+    let mut pending_state = Some(s);
     let hwnd = CreateWindowExW(
         WS_EX_CONTROLPARENT,
         class.as_ptr(),
@@ -381,13 +443,16 @@ unsafe fn run() -> Result<(), String> {
         null_mut(),
         null_mut(),
         instance,
-        raw as _,
+        (&mut pending_state as *mut Option<Box<State>>).cast(),
     );
     if hwnd.is_null() {
+        drop(pending_state);
+        CloseHandle(mutex);
         return Err("Could not create the window.".into());
     }
     if RegisterHotKey(hwnd, 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T' as u32) == 0 {
         DestroyWindow(hwnd);
+        CloseHandle(mutex);
         return Err("Ctrl+Alt+T is unavailable. Another application may already use it.".into());
     }
     // Center on the work area of the monitor containing the cursor.
@@ -397,15 +462,18 @@ unsafe fn run() -> Result<(), String> {
     let mut info: MONITORINFO = zeroed();
     info.cbSize = size_of::<MONITORINFO>() as u32;
     if GetMonitorInfoW(monitor, &mut info) != 0 {
+        let dpi = ui::window_dpi(hwnd);
+        let width = ui::scale_for_dpi(WINDOW_WIDTH, dpi);
+        let height = ui::scale_for_dpi(WINDOW_HEIGHT, dpi);
         let r = info.rcWork;
         SetWindowPos(
             hwnd,
             null_mut(),
-            r.left + (r.right - r.left - WINDOW_WIDTH) / 2,
-            r.top + (r.bottom - r.top - WINDOW_HEIGHT) / 2,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER,
+            r.left + (r.right - r.left - width) / 2,
+            r.top + (r.bottom - r.top - height) / 2,
+            width,
+            height,
+            SWP_NOZORDER,
         );
     }
     if !hidden {
@@ -414,10 +482,15 @@ unsafe fn run() -> Result<(), String> {
     let mut msg: MSG = zeroed();
     while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
         if msg.message == WM_KEYDOWN {
-            if msg.hwnd == (*state(hwnd)).edit
-                && msg.wParam as u32 == VK_V as u32
-                && GetKeyState(VK_CONTROL as i32) < 0
-                && GetKeyState(VK_MENU as i32) >= 0
+            let current = state(hwnd);
+            if !current.is_null()
+                && is_image_paste_shortcut(
+                    msg.hwnd == (*current).edit,
+                    msg.wParam as u32,
+                    GetKeyState(VK_CONTROL as i32),
+                    GetKeyState(VK_MENU as i32),
+                    GetKeyState(VK_SHIFT as i32),
+                )
                 && paste_image(hwnd, true)
             {
                 continue;
@@ -438,4 +511,105 @@ unsafe fn run() -> Result<(), String> {
     }
     CloseHandle(mutex);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[test]
+    fn paste_shortcut_requires_ctrl_without_shift_or_alt() {
+        let down: i16 = -32768;
+        let up: i16 = 0;
+        let v = VK_V as u32;
+
+        assert!(is_image_paste_shortcut(true, v, down, up, up));
+        assert!(!is_image_paste_shortcut(true, v, down, up, down));
+        assert!(!is_image_paste_shortcut(true, v, down, down, up));
+        assert!(!is_image_paste_shortcut(true, v, up, up, up));
+        assert!(!is_image_paste_shortcut(false, v, down, up, up));
+        assert!(!is_image_paste_shortcut(true, VK_C as u32, down, up, up));
+    }
+
+    #[test]
+    fn pending_state_handoff_transfers_once_and_reclaims_on_failure() {
+        struct DropCounter(Arc<AtomicUsize>);
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let s = Box::new(State {
+            edit: null_mut(),
+            target: PathBuf::from("Todo.md"),
+            screenshot: None,
+            icon: unsafe { zeroed() },
+            taskbar: 0,
+            ui: None,
+        });
+        let mut pending = Some(s);
+        let param = (&mut pending as *mut Option<Box<State>>).cast::<()>() as isize;
+
+        let raw = unsafe { take_pending_state(param) };
+        assert!(!raw.is_null());
+        assert!(pending.is_none());
+        assert!(unsafe { take_pending_state(param) }.is_null());
+        assert!(unsafe { take_pending_state(0) }.is_null());
+        unsafe {
+            drop(Box::from_raw(raw));
+        }
+
+        // Also verify Option<DropCounter> drops if CreateWindowExW fails before WM_NCCREATE.
+        let drops = Arc::new(AtomicUsize::new(0));
+        {
+            let _unconsumed = Some(Box::new(DropCounter(Arc::clone(&drops))));
+        }
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn free_window_state_handles_reentrant_destroy_idempotently() {
+        let s = Box::new(State {
+            edit: null_mut(),
+            target: PathBuf::from("Todo.md"),
+            screenshot: None,
+            icon: unsafe { zeroed() },
+            taskbar: 0,
+            ui: None,
+        });
+        let class = wide("STATIC");
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                wide("").as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                null(),
+            )
+        };
+        assert!(!hwnd.is_null());
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(s) as isize);
+            assert!(free_window_state(hwnd));
+            assert!(state(hwnd).is_null());
+            assert!(!free_window_state(hwnd));
+            // Calling reentrant helpers after WM_DESTROY zeroed GWLP_USERDATA must not UB/panic.
+            quit(hwnd);
+            save(hwnd);
+            set_screenshot(hwnd, Some(vec![1, 2, 3]));
+            DestroyWindow(hwnd);
+        }
+    }
 }
